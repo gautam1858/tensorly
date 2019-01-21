@@ -2,8 +2,19 @@ import numpy as np
 from numpy.linalg import qr
 from ..kruskal_tensor import kruskal_to_tensor
 from ..tucker_tensor import tucker_to_tensor
+from ..mps_tensor import mps_to_tensor
 from .. import backend as T
+import warnings
 
+def cp_tensor(*args, **kwargs):
+    message = "'cp_tensor' is depreciated, please use 'random_kruskal' instead"
+    warnings.warn(message, DeprecationWarning)
+    return random_kruskal(*args, **kwargs)
+
+def tucker_tensor(*args, **kwargs):
+    message = "'tucker_tensor' is depreciated, please use 'tucker_tensor' instead"
+    warnings.warn(message, DeprecationWarning)
+    return random_tucker(*args, **kwargs)
 
 def check_random_state(seed):
     """Returns a valid RandomState
@@ -28,9 +39,9 @@ def check_random_state(seed):
 
     raise ValueError('Seed should be None, int or np.random.RandomState')
 
-def cp_tensor(shape, rank, full=False, random_state=None):
+def random_kruskal(shape, rank, full=False, orthogonal=False, random_state=None, **context):
     """Generates a random CP tensor
-    
+
     Parameters
     ----------
     shape : tuple
@@ -40,25 +51,35 @@ def cp_tensor(shape, rank, full=False, random_state=None):
     full : bool, optional, default is False
         if True, a full tensor is returned
         otherwise, the decomposed tensor is returned
+    orthogonal : bool, optional, default is False
+        if True, creates a tensor with orthogonal components
     random_state : `np.random.RandomState`
-        
+    context : dict
+        context in which to create the tensor
+
     Returns
     -------
-    cp_tensor : ND-array or 2D-array list
+    random_kruskal : ND-array or 2D-array list
         ND-array : full tensor if `full` is True
         2D-array list : list of factors otherwise
     """
+    if (rank > min(shape)) and orthogonal:
+        raise ValueError('Can only construct orthogonal tensors when rank <= '
+                         'min(shape)')
+
     rns = check_random_state(random_state)
-    factors = [T.tensor(rns.random_sample((s, rank))) for s in shape]
+    factors = [T.tensor(rns.random_sample((s, rank)), **context) for s in shape]
+    if orthogonal:
+        factors = [T.qr(factor)[0] for factor in factors]
+
     if full:
         return kruskal_to_tensor(factors)
     else:
         return factors
-    
 
-def tucker_tensor(shape, rank, full=False, random_state=None):
+def random_tucker(shape, rank, full=False, orthogonal=False, random_state=None, **context):
     """Generates a random Tucker tensor
-    
+
     Parameters
     ----------
     shape : tuple
@@ -70,8 +91,10 @@ def tucker_tensor(shape, rank, full=False, random_state=None):
     full : bool, optional, default is False
         if True, a full tensor is returned
         otherwise, the decomposed tensor is returned
+    orthogonal : bool, optional, default is False
+        if True, creates a tensor with orthogonal components
     random_state : `np.random.RandomState`
-        
+
     Returns
     -------
     tucker_tensor : ND-array or (ND-array, 2D-array list)
@@ -89,13 +112,68 @@ def tucker_tensor(shape, rank, full=False, random_state=None):
 
     factors = []
     for (s, r) in zip(shape, rank):
-        Q, _= qr(rns.random_sample((s, s)))
-        factors.append(T.tensor(Q[:, :r]))
+        if orthogonal:
+            factor = T.tensor(rns.random_sample((s, s)), **context)
+            Q, _= T.qr(factor)
+            factors.append(T.tensor(Q[:, :r]))
+        else:
+            factors.append(T.tensor(rns.random_sample((s, r)), **context))
 
-    core = T.tensor(rns.random_sample(rank))
+    core = T.tensor(rns.random_sample(rank), **context)
     if full:
         return tucker_to_tensor(core, factors)
     else:
         return core, factors
 
+def random_mps(shape, rank, full=False, random_state=None, **context):
+    """Generates a random MPS/ttrain tensor
 
+    Parameters
+    ----------
+    shape : tuple
+        shape of the tensor to generate
+    rank : int
+        rank of the MPS decomposition
+        must verify rank[0] == rank[-1] ==1 (boundary conditions)
+        and len(rank) == len(shape)+1
+    full : bool, optional, default is False
+        if True, a full tensor is returned
+        otherwise, the decomposed tensor is returned
+    random_state : `np.random.RandomState`
+    context : dict
+        context in which to create the tensor
+
+    Returns
+    -------
+    MPS_tensor : ND-array or 3D-array list
+        * ND-array : full tensor if `full` is True
+        * 3D-array list : list of factors otherwise
+    """
+    n_dim = len(shape) 
+
+    if isinstance(rank, int):
+        rank = [1] + [rank] * (n_dim-1) + [1]
+    elif n_dim+1 != len(rank):
+        message = 'Provided incorrect number of ranks. Should verify len(rank) == tl.ndim(tensor)+1, but len(rank) = {} while tl.ndim(tensor) + 1  = {}'.format(
+            len(rank), n_dim + 1)
+        raise(ValueError(message))
+
+    # Make sure it's not a tuple but a list
+    rank = list(rank)
+
+    # Initialization
+    if rank[0] != 1:
+        message = 'Provided rank[0] == {} but boundaring conditions dictatate rank[0] == rank[-1] == 1: setting rank[0] to 1.'.format(rank[0])
+        raise ValueError(message)
+    if rank[-1] != 1:
+        message = 'Provided rank[-1] == {} but boundaring conditions dictatate rank[0] == rank[-1] == 1: setting rank[-1] to 1.'.format(rank[0])
+        raise ValueError(message)
+
+    rns = check_random_state(random_state)
+    factors = [T.tensor(rns.random_sample((rank[i], s, rank[i+1])), **context)\
+               for i, s in enumerate(shape)]
+
+    if full:
+        return mps_to_tensor(factors)
+    else:
+        return factors

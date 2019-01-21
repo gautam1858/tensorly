@@ -1,9 +1,11 @@
 import numpy as np
+import tensorly as tl
+
 from scipy.sparse.linalg import svds
 from scipy.linalg import svd
 
+from ..backend import numpy_backend
 from .. import backend as T
-import tensorly as tl
 from ..base import fold, unfold
 from ..base import partial_fold, partial_unfold
 from ..base import tensor_to_vec, vec_to_tensor
@@ -18,12 +20,19 @@ def test_set_backend():
     tensor2 = tl.tensor(np.arange(12).reshape((4, 3)))
     if tl._BACKEND == 'pytorch':
         import torch
-        assert type(tensor) == type(tensor2) == torch.FloatTensor
+        assert torch.is_tensor(tensor) and torch.is_tensor(tensor2)
+        # assert type(tensor) == type(tensor2) == torch.FloatTensor
     elif tl._BACKEND == 'numpy':
         assert type(tensor) == type(tensor2) == np.ndarray
     elif tl._BACKEND == 'mxnet':
         import mxnet as mx
         assert type(tensor) == type(tensor2) == mx.nd.NDArray
+    elif tl._BACKEND == 'tensorflow':
+        import tensorflow as tf
+        assert isinstance(tensor, tf.Tensor) and isinstance(tensor2, tf.Tensor)
+    elif tl._BACKEND == 'cupy':
+        import cupy as cp
+        assert isinstance(tensor, cp.ndarray) and isinstance(tensor2, cp.ndarray)
     else:
         raise ValueError('_BACKEND not recognised (got {})'.format(tl._BACKEND))
 
@@ -276,35 +285,180 @@ def test_partial_vec_to_tensor():
         T.assert_array_equal(X, ten)
 
 
-def test_partial_svd():
-    """Test for partial_svd"""
-    sizes = [(100, 100), (100, 5), (10, 10), (5, 100)]
-    n_eigenvecs = [10, 4, 5, 4]
+def test_svd():
+    """Test for the SVD functions"""
+    tol = 0.1
+    tol_orthogonality = 0.01
 
-    # Compare with sparse SVD
-    for s, n in zip(sizes, n_eigenvecs):
-        matrix = np.random.random(s)
-        fU, fS, fV = T.partial_svd(T.tensor(matrix), n_eigenvecs=n)
-        U, S, V = svds(matrix, k=n, which='LM')
-        U, S, V = U[:, ::-1], S[::-1], V[::-1, :]
-        T.assert_array_almost_equal(np.abs(S), T.abs(fS))
-        T.assert_array_almost_equal(np.abs(U), T.abs(fU))
-        T.assert_array_almost_equal(np.abs(V), T.abs(fV))
+    for name, svd_fun in T.SVD_FUNS.items():
+        sizes = [(100, 100), (100, 5), (10, 10), (10, 4), (5, 100)]
+        n_eigenvecs = [90, 4, 5, 4, 5]
 
-    # Compare with standard SVD
-    sizes = [(100, 100), (100, 5), (10, 10), (10, 4), (5, 100)]
-    n_eigenvecs = [10, 4, 5, 4, 4]
-    for s, n in zip(sizes, n_eigenvecs):
-        matrix = np.random.random(s)
-        fU, fS, fV = T.partial_svd(T.tensor(matrix), n_eigenvecs=n)
+        for s, n in zip(sizes, n_eigenvecs):
+            matrix = np.random.random(s)
+            matrix_backend = T.tensor(matrix)
+            fU, fS, fV = svd_fun(matrix_backend, n_eigenvecs=n)
+            U, S, V = svd(matrix)
+            U, S, V = U[:, :n], S[:n], V[:n, :]
 
-        U, S, V = svd(matrix)
-        U, S, V = U[:, :n], S[:n], V[:n, :]
-        # Test for SVD
-        T.assert_array_almost_equal(np.abs(S), T.abs(fS))
-        T.assert_array_almost_equal(np.abs(U), T.abs(fU))
-        T.assert_array_almost_equal(np.abs(V), T.abs(fV))
+            T.assert_array_almost_equal(np.abs(S), T.abs(fS), decimal=3,
+                err_msg='eigenvals not correct for "{}" svd fun VS svd and backend="{}, for {} eigenenvecs, and size {}".'.format(
+                        name, tl.get_backend(), n, s))
 
-    with T.assert_raises(ValueError):
-        tensor = T.tensor(np.random.random((3, 3, 3)))
-        T.partial_svd(tensor)
+            # True reconstruction error (based on numpy SVD)
+            true_rec_error = np.sum((matrix - np.dot(U, S.reshape((-1, 1))*V))**2)
+            # Reconstruction error with the backend's SVD
+            rec_error = T.sum((matrix_backend - T.dot(fU, fS.reshape((-1, 1))*fV))**2)
+            # Check that the two are similar 
+            T.assert_(true_rec_error - rec_error <= tol, 
+                msg='Reconstruction not correct for "{}" svd fun VS svd and backend="{}, for {} eigenenvecs, and size {}".'.format(
+                        name, tl.get_backend(), n, s))
+            
+            # Check for orthogonality when relevant
+            if name != 'symeig_svd':
+                left_orthogonality_error = T.norm(T.dot(T.transpose(fU), fU) - T.eye(n))
+                T.assert_(left_orthogonality_error <= tol_orthogonality,
+                    msg='Left eigenvecs not orthogonal for "{}" svd fun VS svd and backend="{}, for {} eigenenvecs, and size {}".'.format(
+                            name, tl.get_backend(), n, s))
+                right_orthogonality_error = T.norm(T.dot(T.transpose(fU), fU) - T.eye(n))
+                T.assert_(right_orthogonality_error <= tol_orthogonality,
+                    msg='Right eigenvecs not orthogonal for "{}" svd fun VS svd and backend="{}, for {} eigenenvecs, and size {}".'.format(
+                        name, tl.get_backend(), n, s))
+
+        # Should fail on non-matrices
+        with T.assert_raises(ValueError):
+            tensor = T.tensor(np.random.random((3, 3, 3)))
+            svd_fun(tensor)
+
+
+def test_shape():
+    A = T.arange(3*4*5)
+
+    shape1 = (3*4,5)
+    A1 = T.reshape(A, shape1)
+    T.assert_equal(T.shape(A1), shape1)
+
+    shape2 = (3,4,5)
+    A2 = T.reshape(A, shape2)
+    T.assert_equal(T.shape(A2), shape2)
+
+
+def test_ndim():
+    A = T.arange(3*4*5)
+    T.assert_equal(T.ndim(A), 1)
+
+    shape1 = (3*4,5)
+    A1 = T.reshape(A, shape1)
+    T.assert_equal(T.ndim(A1), 2)
+
+    shape2 = (3,4,5)
+    A2 = T.reshape(A, shape2)
+    T.assert_equal(T.ndim(A2), 3)
+
+
+def test_norm():
+    v = T.tensor([1., 2., 3.])
+    T.assert_equal(T.norm(v,1), 6)
+
+    A = T.reshape(T.arange(6), (3,2))
+    T.assert_equal(T.norm(A, 1), 15)
+
+    column_norms1 = T.norm(A, 1, axis=0)
+    row_norms1 = T.norm(A, 1, axis=1)
+    T.assert_array_equal(column_norms1, T.tensor([6., 9]))
+    T.assert_array_equal(row_norms1, T.tensor([1, 5, 9]))
+
+    column_norms2 = T.norm(A, 2, axis=0)
+    row_norms2 = T.norm(A, 2, axis=1)
+    T.assert_array_almost_equal(column_norms2, T.tensor([4.47213602, 5.91608]))
+    T.assert_array_almost_equal(row_norms2, T.tensor([1., 3.60555124, 6.40312433]))
+
+    # limit as order->oo is the oo-norm
+    column_norms10 = T.norm(A, 10, axis=0)
+    row_norms10 = T.norm(A, 10, axis=1)
+    T.assert_array_almost_equal(column_norms10, T.tensor([4.00039053, 5.00301552]))
+    T.assert_array_almost_equal(row_norms10, T.tensor([1., 3.00516224, 5.05125666]))
+
+    column_norms_oo = T.norm(A, 'inf', axis=0)
+    row_norms_oo = T.norm(A, 'inf', axis=1)
+    T.assert_array_equal(column_norms_oo, T.tensor([4, 5]))
+    T.assert_array_equal(row_norms_oo, T.tensor([1, 3, 5]))
+
+
+def test_where():
+    # 1D
+    shape = (2*3*4,); N = np.prod(shape)
+    X = T.arange(N)
+    zeros = T.zeros(X.shape)
+    ones = T.ones(X.shape)
+    out = T.where(X < 2*3, zeros, ones)
+    for i in range(N):
+        if i < 2*3:
+            T.assert_equal(out[i], 0, 'Unexpected result on vector for element {}'.format(i))
+        else:
+            T.assert_equal(out[i], 1, 'Unexpected result on vector for element {}'.format(i))
+
+    # 2D
+    shape = (2*3,4); N = np.prod(shape)
+    X = T.reshape(T.arange(N), shape)
+    zeros = T.zeros(X.shape)
+    ones = T.ones(X.shape)
+    out = T.where(X < 2*3, zeros, ones)
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            index = i*shape[1] + j
+            if index < 2*3:
+                T.assert_equal(out[i,j], 0, 'Unexpected result on matrix')
+            else:
+                T.assert_equal(out[i,j], 1, 'Unexpected result on matrix')
+
+    # 3D
+    shape = (2,3,4); N = np.prod(shape)
+    X = T.reshape(T.arange(N), shape)
+    zeros = T.zeros(X.shape)
+    ones = T.ones(X.shape)
+    out = T.where(X < 2*3, zeros, ones)
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            for k in range(shape[2]):
+                index = (i*shape[1] + j)*shape[2] + k
+                if index < 2*3:
+                    T.assert_equal(out[i,j, k], 0, 'Unexpected result on matrix')
+                else:
+                    T.assert_equal(out[i,j, k], 1, 'Unexpected result on matrix')
+
+    # random testing against Numpy's output
+    shapes = (16,8,4,2)
+    for order in range(1,5):
+        shape = shapes[:order]
+        tensor = T.tensor(np.random.randn(*shape))
+        args = (tensor < 0, T.zeros(shape), T.ones(shape))
+        result = T.where(*args)
+        expected = np.where(*map(T.to_numpy, args))
+        T.assert_array_equal(result, expected)
+
+
+def test_qr():
+    M = 8; N = 5
+    A = T.tensor(np.random.random((M,N)))
+    Q, R = T.qr(A)
+
+    assert T.shape(Q) == (M,N), 'Unexpected shape'
+    assert T.shape(R) == (N,N), 'Unexpected shape'
+
+    # assert that the columns of Q are orthonormal
+    Q_column_norms = T.norm(Q, 2, axis=0)
+    T.assert_array_almost_equal(Q_column_norms, T.ones(N))
+    for i in range(N):
+        for j in range(i):
+            dot_product = T.to_numpy(T.dot(Q[:,i], Q[:,j]))
+            assert abs(dot_product) < 1e-6, 'Columns of Q not orthogonal'
+
+    A_reconstructed = T.dot(Q, R)
+    T.assert_array_almost_equal(A, A_reconstructed)
+
+
+def test_prod():
+    v = T.tensor([3, 4, 5])
+    x = T.to_numpy(T.prod(v))
+    T.assert_equal(x, 60)

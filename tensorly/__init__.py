@@ -2,6 +2,8 @@ import sys
 import importlib
 import os
 
+__version__ = '0.4.3'
+
 # Set the default backend
 default_backend = 'numpy'
 try:
@@ -17,7 +19,7 @@ def set_backend(backend_name):
 
     Parameters
     ----------
-    backend_name : {'mxnet', 'numpy', 'pytorch'}, default is 'numpy'
+    backend_name : {'mxnet', 'numpy', 'pytorch', 'tensorflow', 'cupy'}, default is 'numpy'
     """
     global _BACKEND
     _BACKEND = backend_name
@@ -52,9 +54,5 @@ from .base import partial_tensor_to_vec, partial_vec_to_tensor
 
 from .kruskal_tensor import kruskal_to_tensor, kruskal_to_unfolded, kruskal_to_vec
 from .tucker_tensor import tucker_to_tensor, tucker_to_unfolded, tucker_to_vec
-
-
-__version__ = '0.2.0'
-
-
+from .mps_tensor import mps_to_tensor, mps_to_unfolded, mps_to_vec
 

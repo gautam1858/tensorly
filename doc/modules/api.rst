@@ -2,8 +2,10 @@
 API reference
 =============
 
-:mod:`tensorly`: Setting the backend
-====================================
+:mod:`tensorly`: Manipulating the backend with a unified interface
+==================================================================
+
+In addition to the basic functions such as `shape`, `reshape`, `where`, `min`, etc, each backend provides the following functions:
 
 .. automodule:: tensorly
     :no-members:
@@ -15,6 +17,9 @@ API reference
 
     set_backend
     get_backend
+    context
+    to_numpy
+    partial_svd
 
 :mod:`tensorly.base`: Core tensor functions
 ============================================
@@ -39,8 +44,8 @@ API reference
     partial_vec_to_tensor
 
 
-:mod:`tensorly.kruskal`: Tensors in the Kruskal format
-======================================================
+:mod:`tensorly.kruskal_tensor`: Tensors in the Kruskal format
+=============================================================
 
 .. automodule:: tensorly.kruskal_tensor
     :no-members:
@@ -56,8 +61,8 @@ API reference
     kruskal_to_unfolded
     kruskal_to_vec
 
-:mod:`tensorly.tucker`: Tensors in Tucker format
-================================================
+:mod:`tensorly.tucker_tensor`: Tensors in Tucker format
+=======================================================
 
 .. automodule:: tensorly.tucker_tensor
     :no-members:
@@ -73,9 +78,27 @@ API reference
     tucker_to_unfolded
     tucker_to_vec
 
+:mod:`tensorly.mps_tensor`: Tensors in Matrix-Product-State format
+==================================================================
+
+.. automodule:: tensorly.mps_tensor
+    :no-members:
+    :no-inherited-members:
+
+.. currentmodule:: tensorly.mps_tensor
+
+.. autosummary::
+    :toctree: generated/
+    :template: function.rst
+
+    mps_to_tensor
+    mps_to_unfolded
+    mps_to_vec
+
+
 
 :mod:`tensorly.tenalg`: Tensor algebra
-=============================================
+======================================
 
 .. automodule:: tensorly.tenalg
     :no-members:
@@ -94,6 +117,8 @@ API reference
     proximal.soft_thresholding
     proximal.svd_thresholding
     proximal.procrustes
+    inner
+    contract
 
 
 :mod:`tensorly.decomposition`: Tensor Decomposition
@@ -111,10 +136,13 @@ API reference
 
     parafac
     non_negative_parafac
+    sample_khatri_rao
+    randomised_parafac
     tucker
     partial_tucker
     non_negative_tucker
     robust_pca
+    matrix_product_state
 
 
 :mod:`tensorly.regression`: Tensor Regression
@@ -164,8 +192,9 @@ API reference
    :toctree: generated/
    :template: function.rst
 
-   cp_tensor
-   tucker_tensor
+   random_kruskal
+   random_tucker
+   random_mps 
    check_random_state
 
 
@@ -184,4 +213,21 @@ API reference
     :template: function.rst
 
     synthetic.gen_image
+
+
+:mod:`tensorly.contrib`: Experimental features
+==============================================
+
+.. automodule:: tensorly.contrib
+    :no-members:
+    :no-inherited-members:
+
+.. currentmodule:: tensorly.contrib
+
+.. autosummary::
+    :toctree: generated/
+    :template: function.rst
+
+    decomposition.matrix_product_state_cross
+
 

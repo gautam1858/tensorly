@@ -2,59 +2,83 @@
 Core tensor operations with PyTorch.
 """
 
+# Author: Jean Kossaifi
+# License: BSD 3 clause
+
+
+# First check whether PyTorch is installed
+try:
+    import torch
+except ImportError as error:
+    message = ('Impossible to import PyTorch.\n'
+               'To use TensorLy with the PyTorch backend, '
+               'you must first install PyTorch!')
+    raise ImportError(message) from error
+
+from distutils.version import LooseVersion
+
+if LooseVersion(torch.__version__) < LooseVersion('0.4.0'):
+    raise ImportError('You are using version="{}" of PyTorch.'
+                      'Please update to "0.4.0" or higher.'.format(torch.__version__))
+
 import numpy
 import scipy.linalg
 import scipy.sparse.linalg
 from numpy import testing
-import torch
 from . import numpy_backend
 
-from torch import ones, zeros
-from torch import max, min
-from torch import sum, mean, abs, sqrt, sign
+from torch import ones, zeros, zeros_like, reshape, eye
+from torch import max, min, where
+from torch import sum, mean, abs, sqrt, sign, prod, sqrt
 from torch import matmul as dot
+from torch import qr
+
+dtypes = ['int64', 'int32', 'float32', 'float64']
+for dtype in dtypes:
+    vars()[dtype] = getattr(torch, dtype)
+
+# Order 0 tensor, mxnet....
+from math import sqrt as scalar_sqrt
 
 # Equivalent functions in pytorch 
 maximum = max
 
-
-#import numpy as np
-# Author: Jean Kossaifi
-
-# License: BSD 3 clause
-
 def context(tensor):
     """Returns the context of a tensor
     """
-    return {'dtype':tensor.type()}
+    return {'dtype':tensor.dtype, 'device':tensor.device, 'requires_grad':tensor.requires_grad}
 
 
-def tensor(data, dtype=torch.FloatTensor):
+def tensor(data, dtype=float32, device='cpu', requires_grad=False):
     """Tensor class
     """
     if isinstance(data, numpy.ndarray):
-        return torch.from_numpy(numpy.copy(data)).type(dtype)
-    return torch.Tensor(data).type(dtype)
+        return torch.tensor(data.copy(), dtype=dtype, device=device, requires_grad=requires_grad)
+    return torch.tensor(data, dtype=dtype, device=device, requires_grad=requires_grad)
 
 def to_numpy(tensor):
     """Convert a tensor to numpy format
-
     Parameters
     ----------
     tensor : Tensor
-
     Returns
     -------
     ndarray
     """
     if torch.is_tensor(tensor):
+        if tensor.requires_grad:
+            tensor = tensor.detach()
+        if tensor.cuda:
+            tensor = tensor.cpu()
         return tensor.numpy()
     elif isinstance(tensor, numpy.ndarray):
         return tensor
-    else:
-        raise ValueError('Only torch.Tensor or np.ndarray) are accepted,'
-                         'given {}'.format(type(tensor)))
 
+    try:
+        return numpy.asarray(tensor)
+    except ValueError:
+        raise ValueError('Could not convert object of type {} into a Numpy '
+                         'ndarray'.format(type(tensor)))
 
 def assert_array_equal(a, b, **kwargs):
     testing.assert_array_equal(to_numpy(a), to_numpy(b), **kwargs)
@@ -63,7 +87,14 @@ def assert_array_almost_equal(a, b, decimal=3, **kwargs):
     testing.assert_array_almost_equal(to_numpy(a), to_numpy(b), decimal=decimal, **kwargs)
 
 assert_raises = testing.assert_raises
-assert_equal = testing.assert_equal
+
+def assert_equal(actual, desired, err_msg='', verbose=True):
+    if isinstance(actual, torch.Tensor):
+        actual = to_numpy(actual)
+    if isinstance(desired, torch.Tensor):
+        desired = to_numpy(desired)
+    testing.assert_equal(actual, desired, err_msg=err_msg, verbose=verbose)
+
 assert_ = testing.assert_
 
 def shape(tensor):
@@ -78,12 +109,6 @@ def arange(start, stop=None, step=1.0):
     else:
         return torch.arange(float(start), float(stop), float(step))
 
-def reshape(tensor, shape):
-    try:
-        return tensor.view(*shape)
-    except RuntimeError:
-        return tensor.contiguous().view(*shape)
-
 def clip(tensor, a_min=None, a_max=None, inplace=False):
     if a_max is None:
         a_max = torch.max(tensor)
@@ -97,12 +122,11 @@ def clip(tensor, a_min=None, a_max=None, inplace=False):
 def all(tensor):
     return torch.sum(tensor != 0)
 
-def transpose(tensor):
-    axes = list(range(ndim(tensor)))[::-1]
+def transpose(tensor, axes=None):
+    if axes == None:
+        axes = list(range(ndim(tensor)))[::-1]
     return tensor.permute(*axes)
 
-def zeros_like(tensor, dtype=torch.FloatTensor):
-    return torch.zeros(tensor.size()).type(dtype)
 
 def copy(tensor):
     return tensor.clone()
@@ -135,46 +159,72 @@ def solve(matrix1, matrix2):
     return solution
 
 
-def norm(tensor, order):
-    """Computes the l-`order` norm of tensor
+def norm(tensor, order=2, axis=None):
+    """Computes the l-`order` norm of tensor.
     Parameters
     ----------
     tensor : ndarray
     order : int
+    axis : int
     Returns
     -------
-    float
-        l-`order` norm of tensor
+    float or tensor
+        If `axis` is provided returns a tensor.
     """
+    # pytorch does not accept `None` for any keyword arguments. additionally,
+    # pytorch doesn't seems to support keyword arguments in the first place
+    kwds = {}
+    if axis is not None:
+        kwds['dim'] = axis
+    if order and order != 'inf':
+        kwds['p'] = order
+
     if order == 'inf':
-        return torch.max(torch.abs(tensor))
+        res = torch.max(torch.abs(tensor), **kwds)
+        if axis is not None:
+            return res[0]  # ignore indices output
+        return res
+    return torch.norm(tensor, **kwds)
+
+def mean(tensor, axis=None):
+    if axis is None:
+        return torch.mean(tensor)
     else:
-        return torch.norm(tensor, p=order)
+        return torch.mean(tensor, dim=axis)
+
+def sum(tensor, axis=None):
+    if axis is None:
+        return torch.sum(tensor)
+    else:
+        return torch.sum(tensor, dim=axis)
+
+def concatenate(tensors, axis=0):
+    return torch.cat(tensors, dim=axis)
+
+def argmin(input, axis=None):
+        return torch.argmin(input, dim=axis)
+
+def argmax(input, axis=None):
+        return torch.argmax(input, dim=axis)
 
 
 def kr(matrices):
     """Khatri-Rao product of a list of matrices
-
         This can be seen as a column-wise kronecker product.
-
     Parameters
     ----------
     matrices : ndarray list
         list of matrices with the same number of columns, i.e.::
-
             for i in len(matrices):
                 matrices[i].shape = (n_i, m)
-
     Returns
     -------
     khatri_rao_product: matrix of shape ``(prod(n_i), m)``
         where ``prod(n_i) = prod([m.shape[0] for m in matrices])``
         i.e. the product of the number of rows of all the matrices in the product.
-
     Notes
     -----
     Mathematically:
-
     .. math::
          \\text{If every matrix } U_k \\text{ is of size } (I_k \\times R),\\\\
          \\text{Then } \\left(U_1 \\bigodot \\cdots \\bigodot U_n \\right) \\text{ is of size } (\\prod_{k=1}^n I_k \\times R)
@@ -194,13 +244,116 @@ def kr(matrices):
                       (-1, n_col))
     return res
 
+def _reverse(tensor, axis=0):
+    """Reverses the elements along the specified dimension
+    Parameters
+    ----------
+    tensor : tl.tensor
+    axis : int, default is 0
+        axis along which to reverse the ordering of the elements
+    Returns
+    -------
+    reversed_tensor : for a 1-D tensor, returns the equivalent of
+                      tensor[::-1] in NumPy
+    """
+    indices = torch.arange(tensor.shape[axis]-1, -1, -1, dtype=torch.int64)
+    return tensor.index_select(axis, indices)
+
+def truncated_svd(matrix, n_eigenvecs=None):
+    """Computes a truncated SVD on `matrix` using pytorch's SVD
+    Parameters
+    ----------
+    matrix : 2D-array
+    n_eigenvecs : int, optional, default is None
+        if specified, number of eigen[vectors-values] to return
+    Returns
+    -------
+    U : 2D-array
+        of shape (matrix.shape[0], n_eigenvecs)
+        contains the right singular vectors
+    S : 1D-array
+        of shape (n_eigenvecs, )
+        contains the singular values of `matrix`
+    V : 2D-array
+        of shape (n_eigenvecs, matrix.shape[1])
+        contains the left singular vectors
+    """
+    dim_1, dim_2 = matrix.shape
+    if dim_1 <= dim_2:
+        min_dim = dim_1
+    else:
+        min_dim = dim_2
+
+    if n_eigenvecs is None or n_eigenvecs > min_dim:
+        full_matrices = True
+    else:
+        full_matrices = False
+
+    U, S, V = torch.svd(matrix, some=full_matrices)
+    U, S, V = U[:, :n_eigenvecs], S[:n_eigenvecs], V[:n_eigenvecs, :]
+    return U, S, V
+
+def symeig_svd(matrix, n_eigenvecs=None):
+    """Computes a truncated SVD on `matrix` using symeig
+        Uses symeig on matrix.T.dot(matrix) or its transpose
+    Parameters
+    ----------
+    matrix : 2D-array
+    n_eigenvecs : int, optional, default is None
+        if specified, number of eigen[vectors-values] to return
+    Returns
+    -------
+    U : 2D-array
+        of shape (matrix.shape[0], n_eigenvecs)
+        contains the right singular vectors
+    S : 1D-array
+        of shape (n_eigenvecs, )
+        contains the singular values of `matrix`
+    V : 2D-array
+        of shape (n_eigenvecs, matrix.shape[1])
+        contains the left singular vectors
+    """
+    # Check that matrix is... a matrix!
+    if ndim(matrix) != 2:
+        raise ValueError('matrix be a matrix. matrix.ndim is {} != 2'.format(ndim(matrix)))
+    dim_1, dim_2 = shape(matrix)
+
+    if dim_1 <= dim_2:
+        min_dim = dim_1
+        max_dim = dim_2
+    else:
+        min_dim = dim_2
+        max_dim = dim_1
+
+    if n_eigenvecs is None:
+        n_eigenvecs = max_dim
+
+    if min_dim <= n_eigenvecs:
+        if n_eigenvecs > max_dim:
+            message = ('trying to compute SVD with n_eigenvecs={}, which is larger than'
+                       'max(matrix.shape)={1}. Setting n_eigenvecs to {1}'.format(
+                           n_eigenvecs, max_dim))
+            n_eigenvecs = max_dim
+        # we compute decomposition on the largest of the two to keep more eigenvecs
+        dim_1, dim_2 = dim_2, dim_1
+
+    if dim_1 < dim_2:
+        S, U = torch.symeig(dot(matrix, transpose(matrix)))
+        S = sqrt(S)
+        V = dot(transpose(matrix), U * 1/reshape(S, (1, -1)))
+    else:
+        S, V = torch.symeig(dot(transpose(matrix), matrix))
+        S = sqrt(S)
+        U = dot(matrix, V) * 1/reshape(S, (1, -1))
+
+    U, S, V = _reverse(U, 1), _reverse(S), _reverse(transpose(V), 0)
+    return U[:, :n_eigenvecs], S[:n_eigenvecs], V[:n_eigenvecs, :]
 
 def partial_svd(matrix, n_eigenvecs=None):
-    """Computes a fast partial SVD on `matrix`
-
+    """Computes a fast partial SVD on `matrix` using NumnPy
         if `n_eigenvecs` is specified, sparse eigendecomposition
         is used on either matrix.dot(matrix.T) or matrix.T.dot(matrix)
-
+        Faster for very sparse svd (n_eigenvecs small) but uses numpy/scipy
     Parameters
     ----------
     matrix : 2D-array
@@ -219,12 +372,9 @@ def partial_svd(matrix, n_eigenvecs=None):
         of shape (n_eigenvecs, matrix.shape[1])
         contains the left singular vectors
     """
-    # Check that matrix is... a matrix!
-    if ndim(matrix) != 2:
-        raise ValueError('matrix be a matrix. matrix.ndim is {} != 2'.format(
-            ndim(matrix)))
+    ctx = context(matrix)
+    matrix = to_numpy(matrix)
+    U, S, V = numpy_backend.partial_svd(matrix, n_eigenvecs)
+    return tensor(U, **ctx), tensor(S, **ctx), tensor(V, **ctx)
 
-    U, S, V = torch.svd(matrix, some=False)
-    U, S, V = U[:, :n_eigenvecs], S[:n_eigenvecs], V.t()[:n_eigenvecs, :]
-    return U, S, V
-
+SVD_FUNS = {'numpy_svd':partial_svd, 'truncated_svd':truncated_svd, 'symeig_svd':symeig_svd}

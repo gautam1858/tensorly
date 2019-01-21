@@ -1,5 +1,5 @@
 # Automate testing etc
-BACKEND?='mxnet'
+BACKEND?='numpy'
 
 all: install test
 
